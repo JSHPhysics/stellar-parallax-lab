@@ -306,10 +306,11 @@ header {
 }
 canvas {
   display: block; cursor: crosshair; width: 100%;
-  /* Touch devices: prevent browser-managed scroll/pinch on the canvas itself so
-     we can implement drag-to-align and tap-to-mark without fighting the browser.
-     Page-level pinch-zoom (outside the canvas) still works for zooming in on detail. */
-  touch-action: none;
+  /* Default touch behaviour: allow page scroll (pan) AND pinch-zoom so mobile
+     users can (a) scroll past the canvas and (b) zoom in on star fields for
+     more accurate targeting.  We switch this to 'pinch-zoom' only in step 3,
+     where free-form single-finger dragging is the primary interaction. */
+  touch-action: manipulation;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -1305,24 +1306,38 @@ function onCanvasMouseUp() {
   if (canvas) canvas.style.cursor = 'crosshair';
 }
 
-// ---- Touch parity for iPad / phones -----------------------------------------
-// Convert a single-touch event to a mouse-shaped object (only clientX/Y used
-// by getMousePos) and delegate to the existing mouse handlers.  preventDefault
-// keeps the browser from scrolling / pinch-zooming while dragging.
-function onCanvasTouchStart(e) {
-  if (!e.touches || e.touches.length !== 1) return;
-  e.preventDefault();
-  state._lastInputWasTouch = true;
-  onCanvasMouseDown(e.touches[0]);
+// ---- Unified pointer input (mouse + touch + pen) ---------------------------
+// We use PointerEvents so there is ONE code path for all input devices, and no
+// double-firing when a tap synthesises compatibility mouse events on iOS.
+// Critically:
+//   * outside step 3 the canvas has touch-action: manipulation, so a vertical
+//     swipe that starts on the canvas still scrolls the page, and a two-finger
+//     pinch still zooms the page.  Brief taps come through as pointerdown/up
+//     for our mark-placement logic.
+//   * inside step 3 we switch the canvas to touch-action: pinch-zoom and use
+//     setPointerCapture so single-finger drag is fully owned by our JS and
+//     doesn't fight the browser's pan gesture.
+function onPointerDown(e) {
+  // Only primary pointer (first finger / left mouse button / stylus tip).
+  if (e.isPrimary === false) return;
+  state._lastInputWasTouch = (e.pointerType === 'touch' || e.pointerType === 'pen');
+  // In step 3 we claim the pointer so subsequent moves / ups route here even
+  // if the finger slides off the canvas edge.
+  if (state.step === 3 && state.showJul && state.imgReady) {
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    if (e.cancelable) e.preventDefault();
+  }
+  onCanvasMouseDown(e);
 }
-function onCanvasTouchMove(e) {
-  if (!e.touches || e.touches.length !== 1) return;
-  e.preventDefault();
-  state._lastInputWasTouch = true;
-  onCanvasMouseMove(e.touches[0]);
+function onPointerMove(e) {
+  if (!state.isDraggingImage) return;
+  if (e.cancelable) e.preventDefault();
+  onCanvasMouseMove(e);
 }
-function onCanvasTouchEnd(e) {
-  if (e && e.cancelable) e.preventDefault();
+function onPointerUp(e) {
+  if (canvas.hasPointerCapture && canvas.hasPointerCapture(e.pointerId)) {
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
   onCanvasMouseUp();
 }
 
@@ -1358,15 +1373,27 @@ function buildMainArea() {
 
   canvas = document.getElementById('sky');
   ctx = canvas.getContext('2d');
-  canvas.addEventListener('mousedown', (e) => { state._lastInputWasTouch = false; onCanvasMouseDown(e); });
-  canvas.addEventListener('mousemove', onCanvasMouseMove);
-  canvas.addEventListener('mouseup', onCanvasMouseUp);
-  canvas.addEventListener('mouseleave', onCanvasMouseUp);
-  // Touch — needs non-passive so preventDefault() actually blocks scrolling
-  canvas.addEventListener('touchstart',  onCanvasTouchStart, { passive: false });
-  canvas.addEventListener('touchmove',   onCanvasTouchMove,  { passive: false });
-  canvas.addEventListener('touchend',    onCanvasTouchEnd,   { passive: false });
-  canvas.addEventListener('touchcancel', onCanvasTouchEnd,   { passive: false });
+  // Single unified input path via PointerEvents — works for mouse, touch, pen.
+  canvas.addEventListener('pointerdown',   onPointerDown);
+  canvas.addEventListener('pointermove',   onPointerMove);
+  canvas.addEventListener('pointerup',     onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
+  canvas.addEventListener('pointerleave',  onPointerUp);
+  // contextmenu on long-press (iOS) — suppress so long-press near a star
+  // doesn't pop up the image save menu.
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Apply initial touch-action for whichever step we're on.
+  updateCanvasTouchAction();
+}
+
+// Switch the canvas between:
+//   * step 3 (align)  → touch-action: pinch-zoom  (we own single-finger drag;
+//                       browser keeps two-finger pinch-zoom)
+//   * anything else   → touch-action: manipulation  (scroll + pinch both work;
+//                       taps are instantaneous, no 300ms delay)
+function updateCanvasTouchAction() {
+  if (!canvas) return;
+  canvas.style.touchAction = (state.step === 3) ? 'pinch-zoom' : 'manipulation';
 }
 
 function buildLanding() {
@@ -2066,6 +2093,7 @@ function goToStep(n) {
     state.showJan = true; state.showJul = true;
   }
   state.placingMode = null;
+  updateCanvasTouchAction();
   renderAll();
 }
 
