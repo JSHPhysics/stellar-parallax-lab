@@ -1,0 +1,36 @@
+# Cached raw FITS pulled from SkyView — regeneratable by re-running
+# prepare_images.py with network access.  ~12 MB; keep it local.
+fits_cache/
+
+# Development preview PNGs decoded from the manifest for visual checks.
+# Not consumed by the simulation itself.
+preview_*.png
+
+# One-off reconnaissance script and its outputs from the initial 10-minute
+# sanity check.  Useful for reference but not part of the production pipeline.
+recon.py
+recon_*.fits
+recon_*.png
+
+# Scratch clone made when comparing local vs remote
+_remote_check/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Claude / local tooling state.  .claude/launch.json is committed because it
+# documents the local-preview command (`python -m http.server 8765`).  If
+# Claude Code adds machine-specific subdirs here later, ignore them explicitly.
+
